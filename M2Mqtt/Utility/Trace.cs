@@ -32,7 +32,7 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
     }
 
     // delegate for writing trace
-    public delegate void WriteTrace(string format, params object[] args);
+    public delegate void WriteTrace(TraceLevel level, string format, params object[] args);
 
     /// <summary>
     /// Tracing class
@@ -47,7 +47,7 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
         {
             if (TraceListener != null)
             {
-                TraceListener(format, args);
+                TraceListener(TraceLevel.Verbose, format, args);
             }
         }
 
@@ -55,7 +55,7 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
         {
             if (TraceListener != null && (level & TraceLevel) > 0)
             {
-                TraceListener(format);
+                TraceListener(level, format);
             }
         }
 
@@ -63,7 +63,7 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
         {
             if (TraceListener != null && (level & TraceLevel) > 0)
             {
-                TraceListener(format, arg1);
+                TraceListener(level, format, arg1);
             }
         }
 
@@ -71,7 +71,7 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
         {
             if (TraceListener != null && (level & TraceLevel) > 0)
             {
-                TraceListener(format, arg1, arg2);
+                TraceListener(level, format, arg1, arg2);
             }
         }
 
@@ -79,7 +79,7 @@ namespace uPLibrary.Networking.M2Mqtt.Utility
         {
             if (TraceListener != null && (level & TraceLevel) > 0)
             {
-                TraceListener(format, arg1, arg2, arg3);
+                TraceListener(level, format, arg1, arg2, arg3);
             }
         }
     }

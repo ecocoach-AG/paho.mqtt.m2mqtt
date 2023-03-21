@@ -28,6 +28,7 @@ namespace uPLibrary.Networking.M2Mqtt.Messages
     public class MqttMsgPublishEventArgs : EventArgs
     {
         #region Properties...
+        public ushort MessageId { get; private set; }
 
         /// <summary>
         /// Message topic
@@ -85,7 +86,7 @@ namespace uPLibrary.Networking.M2Mqtt.Messages
         // quality of service level
         private byte qosLevel;
         // retain flag
-        private bool retain;       
+        private bool retain;
 
         /// <summary>
         /// Constructor
@@ -95,12 +96,15 @@ namespace uPLibrary.Networking.M2Mqtt.Messages
         /// <param name="dupFlag">Duplicate delivery flag</param>
         /// <param name="qosLevel">Quality of Service level</param>
         /// <param name="retain">Retain flag</param>
+        /// <param name="messageId"></param>
         public MqttMsgPublishEventArgs(string topic,
-            byte[] message,
-            bool dupFlag,
-            byte qosLevel,
-            bool retain)
+                                       byte[] message,
+                                       bool dupFlag,
+                                       byte qosLevel,
+                                       bool retain, 
+                                       ushort messageId)
         {
+            MessageId = messageId;
             this.topic = topic;
             this.message = message;
             this.dupFlag = dupFlag;

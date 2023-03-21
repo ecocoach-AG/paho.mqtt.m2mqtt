@@ -242,7 +242,7 @@ namespace uPLibrary.Networking.M2Mqtt.Messages
             int messageOffset = 0;
             msg.message = new byte[messageSize];
 
-            // BUG FIX 26/07/2013 : receiving large payload
+            // _BUG FIX 26/07/2013 : receiving large payload
 
             // copy first part of payload data received
             Array.Copy(buffer, index, msg.message, messageOffset, received - index);

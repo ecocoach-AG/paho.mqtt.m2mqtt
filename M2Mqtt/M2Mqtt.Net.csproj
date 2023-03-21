@@ -75,6 +75,7 @@
     <Compile Include="Messages\MqttMsgUnsubscribedEventArgs.cs" />
     <Compile Include="Messages\MqttMsgUnsubscribeEventArgs.cs" />
     <Compile Include="MqttClient.cs" />
+    <Compile Include="MqttLibraryExceptionEventArgs.cs" />
     <Compile Include="MqttSecurity.cs" />
     <Compile Include="Net\Fx.cs" />
     <Compile Include="Net\MqttNetworkChannel.cs" />
@@ -83,10 +84,14 @@
     <Compile Include="Session\MqttBrokerSession.cs" />
     <Compile Include="Session\MqttClientSession.cs" />
     <Compile Include="Session\MqttSession.cs" />
+    <Compile Include="Utility\MonitoredLock.cs" />
     <Compile Include="Utility\Trace.cs" />
     <Compile Include="Utility\QueueExtension.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!--<PropertyGroup>
+    <PreBuildEvent>rd /s /q "$(ProjectDir)\obj"</PreBuildEvent>
+  </PropertyGroup>-->
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.
   <Target Name="BeforeBuild">
@@ -94,4 +99,10 @@
   <Target Name="AfterBuild">
   </Target>
   -->
+  <Target Name="BeforeBuild">
+    <!-- Remove obj folder -->
+    <RemoveDir Directories="$(BaseIntermediateOutputPath)" />
+    <!-- Remove bin folder -->
+    <RemoveDir Directories="$(BaseOutputPath)" />
+  </Target>
 </Project>

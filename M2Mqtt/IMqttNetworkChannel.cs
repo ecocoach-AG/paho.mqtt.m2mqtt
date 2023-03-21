@@ -30,6 +30,16 @@ namespace uPLibrary.Networking.M2Mqtt
         bool DataAvailable { get; }
 
         /// <summary>
+        /// Local TCP port assigned when connecting
+        /// </summary>
+        string LocalPort { get; }
+
+        /// <summary>
+        /// Indicates where this channel is reading bytes from the socket.
+        /// </summary>
+        bool IsReceiving { get; }
+
+        /// <summary>
         /// Receive data from the network channel
         /// </summary>
         /// <param name="buffer">Data buffer for receiving data</param>

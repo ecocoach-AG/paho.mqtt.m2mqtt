@@ -14,9 +14,15 @@ Contributors:
    Paolo Patierno - initial API and implementation and/or initial documentation
 */
 
+
 #if SSL
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3)
 using Microsoft.SPOT.Net.Security;
+#elif (COMPACT_FRAMEWORK)
+using Org.BouncyCastle.Crypto.Tls;
+using Org.BouncyCastle.Security;
+using Org.BouncyCastle.X509;
+using uPLibrary.Networking.M2Mqtt.Net;
 #else
 using System.Net.Security;
 using System.Security.Authentication;
@@ -24,11 +30,23 @@ using System.Security.Authentication;
 #endif
 using System.Net.Sockets;
 using System.Net;
+#if !(COMPACT_FRAMEWORK)
 using System.Security.Cryptography.X509Certificates;
+#endif
 using System;
+using M2Mqtt.NetStandard.Utility;
+
+// ReSharper disable UseNullPropagation
+
+// ReSharper disable EnforceIfStatementBraces
+// ReSharper disable EnforceWhileStatementBraces
 
 namespace uPLibrary.Networking.M2Mqtt
 {
+#if COMPACT_FRAMEWORK
+
+#endif
+
     /// <summary>
     /// Channel to communicate over the network
     /// </summary>
@@ -43,8 +61,13 @@ namespace uPLibrary.Networking.M2Mqtt
         private IPAddress remoteIpAddress;
         private int remotePort;
 
+#if !COMPACT_FRAMEWORK
         // socket for communication
         private Socket socket;
+#else
+        private TcpClient tcp;
+        private TlsClient tlsClient;
+#endif
         // using SSL
         private bool secure;
 
@@ -75,11 +98,35 @@ namespace uPLibrary.Networking.M2Mqtt
 
 #if SSL
         // SSL stream
+#if !COMPACT_FRAMEWORK
         private SslStream sslStream;
-#if (!MF_FRAMEWORK_VERSION_V4_2 && !MF_FRAMEWORK_VERSION_V4_3)
+#else
+        private TlsClientProtocol tlsHandler;
+#endif
+#if (!MF_FRAMEWORK_VERSION_V4_2 && !MF_FRAMEWORK_VERSION_V4_3 && !COMPACT_FRAMEWORK)
         private NetworkStream netStream;
 #endif
 #endif
+        private readonly object streamLock = new object();
+
+        // Local TCP port, cached for log output as it's unavailable from the socket after disposed exception.
+        private string localPort = "???";
+
+        private bool _isReceiving = false;
+        private readonly object _isReceivingLock = new object();
+
+        public bool IsReceiving { get {
+#if USEMONITOREDLOCK
+            using (new MonitoredLock(_isReceivingLock, "MqttNetworkChannel.IsReceiving _isReceivingLock"))
+#else
+            lock (_isReceivingLock)
+#endif
+            {
+                return _isReceiving;
+            }
+        } }
+
+        public string LocalPort { get { return this.localPort; } }
 
         /// <summary>
         /// Data available on the channel
@@ -88,21 +135,33 @@ namespace uPLibrary.Networking.M2Mqtt
         {
             get
             {
+#if USEMONITOREDLOCK
+                using (new MonitoredLock(this.streamLock, "MqttNetworkChannel.DataAvailable streamLock"))
+#else
+                lock (this.streamLock)
+#endif
+                {
 #if SSL
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3)
-                if (secure)
-                    return this.sslStream.DataAvailable;
-                else
-                    return (this.socket.Available > 0);
+                    if (secure)
+                        return this.sslStream.DataAvailable;
+                    else
+                        return (this.socket.Available > 0);
+#elif COMPACT_FRAMEWORK
+                    if (secure)
+                        return ((NetworkStream) this.tlsHandler.Stream).DataAvailable;
+                    else
+                        return (this.tcp.Client.Available > 0);
 #else
-                if (secure)
-                    return this.netStream.DataAvailable;
-                else
-                    return (this.socket.Available > 0);
+                    if (secure)
+                        return this.netStream.DataAvailable;
+                    else
+                        return (this.socket.Available > 0);
 #endif
 #else
-                return (this.socket.Available > 0);
+                    return (this.socket.Available > 0);
 #endif
+                }
             }
         }
 
@@ -137,7 +196,11 @@ namespace uPLibrary.Networking.M2Mqtt
         public MqttNetworkChannel(Socket socket, bool secure, X509Certificate serverCert, MqttSslProtocols sslProtocol)
 #endif
         {
+#if COMPACT_FRAMEWORK
+            this.tcp = new TcpClient(socket.AddressFamily);
+#else
             this.socket = socket;
+#endif
             this.secure = secure;
             this.serverCert = serverCert;
             this.sslProtocol = sslProtocol;
@@ -156,7 +219,7 @@ namespace uPLibrary.Networking.M2Mqtt
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
             : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None, null, null)
 #else
-            : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None)
+            : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None, new BasicTlsClient())
 #endif
         {
         }
@@ -176,6 +239,9 @@ namespace uPLibrary.Networking.M2Mqtt
         public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol,
             RemoteCertificateValidationCallback userCertificateValidationCallback,
             LocalCertificateSelectionCallback userCertificateSelectionCallback)
+#elif (COMPACT_FRAMEWORK)
+        /// <param name="tlsClient">Bouncy Castle Tls Client - set null to use default client (no client certificate checks)</param>
+        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol, TlsClient tlsClient)
 #else
         public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol)
 #endif
@@ -215,6 +281,9 @@ namespace uPLibrary.Networking.M2Mqtt
             this.caCert = caCert;
             this.clientCert = clientCert;
             this.sslProtocol = sslProtocol;
+#if COMPACT_FRAMEWORK
+            this.tlsClient = tlsClient;
+#endif
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
             this.userCertificateValidationCallback = userCertificateValidationCallback;
             this.userCertificateSelectionCallback = userCertificateSelectionCallback;
@@ -226,43 +295,78 @@ namespace uPLibrary.Networking.M2Mqtt
         /// </summary>
         public void Connect()
         {
-            this.socket = new Socket(this.remoteIpAddress.GetAddressFamily(), SocketType.Stream, ProtocolType.Tcp);
-            // try connection to the broker
-            this.socket.Connect(new IPEndPoint(this.remoteIpAddress, this.remotePort));
+#if USEMONITOREDLOCK
+            using (new MonitoredLock(this.streamLock, "MqttNetworkChannel.Connect streamLock"))
+#else
+            lock (this.streamLock)
+#endif
+            {
+#if COMPACT_FRAMEWORK
+                this.tcp = new TcpClient();
+                this.tcp.Connect(new IPEndPoint(this.remoteIpAddress, this.remotePort));
+#else
+                this.socket = new Socket(this.remoteIpAddress.GetAddressFamily(), SocketType.Stream, ProtocolType.Tcp);
+
+                // try connection to the broker
+                this.socket.Connect(new IPEndPoint(this.remoteIpAddress, this.remotePort));
+#endif
+
+#if COMPACT_FRAMEWORK
+                var localEndpoint = this.tcp.Client.LocalEndPoint;
+#else
+                var localEndpoint = this.socket.LocalEndPoint;
+#endif
+                var splitStr = localEndpoint.ToString().Split(':');
+                var splitLen = splitStr.Length;
+                if (splitLen > 1)
+                {
+                    this.localPort = splitStr[splitLen - 1];
+                }
 
 #if SSL
-            // secure channel requested
-            if (secure)
-            {
-                // create SSL stream
+
+                // secure channel requested
+                if (secure)
+                {
+                    // create SSL stream
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3)
-                this.sslStream = new SslStream(this.socket);
+                    this.sslStream = new SslStream(this.socket);
+#elif COMPACT_FRAMEWORK
+                    this.tlsHandler = new TlsClientProtocol(tcp.GetStream(), new SecureRandom());
+
+                    this.tlsHandler.Connect(tlsClient ?? new BasicTlsClient());
 #else
-                this.netStream = new NetworkStream(this.socket);
-                this.sslStream = new SslStream(this.netStream, false, this.userCertificateValidationCallback, this.userCertificateSelectionCallback);
+                    this.netStream = new NetworkStream(this.socket);
+                    this.sslStream = new SslStream(this.netStream, false, this.userCertificateValidationCallback, this.userCertificateSelectionCallback);
+                    this.sslStream.ReadTimeout = 10 * 1000;
+                    this.sslStream.WriteTimeout = 10 * 1000;
 #endif
 
-                // server authentication (SSL/TLS handshake)
+                    // server authentication (SSL/TLS handshake)
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3)
-                this.sslStream.AuthenticateAsClient(this.remoteHostName,
-                    this.clientCert,
-                    new X509Certificate[] { this.caCert },
-                    SslVerification.CertificateRequired,
-                    MqttSslUtility.ToSslPlatformEnum(this.sslProtocol));
+                    this.sslStream.AuthenticateAsClient(this.remoteHostName,
+                        this.clientCert,
+                        new X509Certificate[] { this.caCert },
+                        SslVerification.CertificateRequired,
+                        MqttSslUtility.ToSslPlatformEnum(this.sslProtocol));
+#elif COMPACT_FRAMEWORK
+                    // nothing to do here - see TO DOs at top of file
 #else
-                X509CertificateCollection clientCertificates = null;
-                // check if there is a client certificate to add to the collection, otherwise it's null (as empty)
-                if (this.clientCert != null)
-                    clientCertificates = new X509CertificateCollection(new X509Certificate[] { this.clientCert });
+                    X509CertificateCollection clientCertificates = null;
 
-                this.sslStream.AuthenticateAsClient(this.remoteHostName,
-                    clientCertificates,
-                    MqttSslUtility.ToSslPlatformEnum(this.sslProtocol),
-                    false);
-                
+                    // check if there is a client certificate to add to the collection, otherwise it's null (as empty)
+                    if (this.clientCert != null)
+                        clientCertificates = new X509CertificateCollection(new X509Certificate[] { this.clientCert });
+
+                    this.sslStream.AuthenticateAsClient(this.remoteHostName,
+                                                        clientCertificates,
+                                                        MqttSslUtility.ToSslPlatformEnum(this.sslProtocol),
+                                                        false);
+
+#endif
+                }
 #endif
             }
-#endif
         }
 
         /// <summary>
@@ -272,18 +376,46 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <returns>Number of byte sent</returns>
         public int Send(byte[] buffer)
         {
-#if SSL
-            if (this.secure)
-            {
-                this.sslStream.Write(buffer, 0, buffer.Length);
-                this.sslStream.Flush();
-                return buffer.Length;
-            }
-            else
-                return this.socket.Send(buffer, 0, buffer.Length, SocketFlags.None);
+#if USEMONITOREDLOCK
+            using (new MonitoredLock(this.streamLock, "MqttNetworkChannel.Send streamLock"))
 #else
-            return this.socket.Send(buffer, 0, buffer.Length, SocketFlags.None);
+            lock (this.streamLock)
 #endif
+            {
+#if SSL
+                if (this.secure)
+                {
+                    try
+                    {
+#if COMPACT_FRAMEWORK
+                        this.tlsHandler.Stream.Write(buffer, 0, buffer.Length);
+                        this.tlsHandler.Stream.Flush();
+#else
+
+                        this.sslStream.Write(buffer, 0, buffer.Length);
+                        this.sslStream.Flush();
+#endif
+                    }
+                    catch (Exception e)
+                    {
+#if TRACE
+                        Utility.Trace.WriteLine(Utility.TraceLevel.Warning, "{0} occurred while writing to SSL stream, port {1}.", e.GetType(), localPort);
+#endif
+                        throw;
+                    }
+
+                    return buffer.Length;
+                }
+                else
+#if COMPACT_FRAMEWORK
+                    return this.tcp.Client.Send(buffer, 0, buffer.Length, SocketFlags.None);
+#else
+                    return this.socket.Send(buffer, 0, buffer.Length, SocketFlags.None);
+#endif
+#else
+                return this.socket.Send(buffer, 0, buffer.Length, SocketFlags.None);
+#endif
+            }
         }
 
         /// <summary>
@@ -293,24 +425,71 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <returns>Number of bytes received</returns>
         public int Receive(byte[] buffer)
         {
-#if SSL
-            if (this.secure)
+            try
             {
-                // read all data needed (until fill buffer)
-                int idx = 0, read = 0;
-                while (idx < buffer.Length)
+#if USEMONITOREDLOCK
+                using (new MonitoredLock(_isReceivingLock, "MqttNetworkChannel.Receive _isReceivingLock"))
+#else
+                lock (_isReceivingLock)
+#endif
                 {
-                    // fixed scenario with socket closed gracefully by peer/broker and
-                    // Read return 0. Avoid infinite loop.
-                    read = this.sslStream.Read(buffer, idx, buffer.Length - idx);
-                    if (read == 0)
-                        return 0;
-                    idx += read;
+                    _isReceiving = true;
                 }
-                return buffer.Length;
-            }
-            else
-            {
+
+#if USEMONITOREDLOCK
+                using (new MonitoredLock(this.streamLock, "MqttNetworkChannel.Receive streamLock"))
+#else
+                lock (this.streamLock)
+#endif
+                {
+
+#if SSL
+                    if (this.secure)
+                    {
+                        // read all data needed (until fill buffer)
+                        int idx = 0, read = 0;
+                        while (idx < buffer.Length)
+                        {
+                            // fixed scenario with socket closed gracefully by peer/broker and
+                            // Read return 0. Avoid infinite loop.
+#if COMPACT_FRAMEWORK
+                        read = this.tlsHandler.Stream.Read(buffer, idx, buffer.Length - idx);
+#else
+                            read = this.sslStream.Read(buffer, idx, buffer.Length - idx);
+#endif
+
+                            if (read == 0)
+                            {
+                                throw new Exception("Unable to read any byte from ssl stream");
+                            }
+
+                            idx += read;
+                        }
+
+                        return buffer.Length;
+                    }
+                    else
+                    {
+                        // read all data needed (until fill buffer)
+                        int idx = 0, read = 0;
+                        while (idx < buffer.Length)
+                        {
+                            // fixed scenario with socket closed gracefully by peer/broker and
+                            // Read return 0. Avoid infinite loop.
+#if COMPACT_FRAMEWORK
+                        read = this.tcp.Client.Receive(buffer, idx, buffer.Length - idx, SocketFlags.None);
+#else
+                            read = this.socket.Receive(buffer, idx, buffer.Length - idx, SocketFlags.None);
+#endif
+                            if (read == 0)
+                                return 0;
+
+                            idx += read;
+                        }
+
+                        return buffer.Length;
+                    }
+#else
                 // read all data needed (until fill buffer)
                 int idx = 0, read = 0;
                 while (idx < buffer.Length)
@@ -323,21 +502,21 @@ namespace uPLibrary.Networking.M2Mqtt
                     idx += read;
                 }
                 return buffer.Length;
-            }
-#else
-            // read all data needed (until fill buffer)
-            int idx = 0, read = 0;
-            while (idx < buffer.Length)
-            {
-                // fixed scenario with socket closed gracefully by peer/broker and
-                // Read return 0. Avoid infinite loop.
-                read = this.socket.Receive(buffer, idx, buffer.Length - idx, SocketFlags.None);
-                if (read == 0)
-                    return 0;
-                idx += read;
-            }
-            return buffer.Length;
 #endif
+                }
+
+            }
+            finally
+            {
+#if USEMONITOREDLOCK
+                using (new MonitoredLock(_isReceivingLock, "MqttNetworkChannel.Receive1 _isReceivingLock"))
+#else
+                lock (_isReceivingLock)
+#endif
+                {
+                    _isReceiving = false;
+                }
+            }
         }
 
         /// <summary>
@@ -349,7 +528,11 @@ namespace uPLibrary.Networking.M2Mqtt
         public int Receive(byte[] buffer, int timeout)
         {
             // check data availability (timeout is in microseconds)
+#if COMPACT_FRAMEWORK
+            if (this.tcp.Client.Poll(timeout * 1000, SelectMode.SelectRead))
+#else
             if (this.socket.Poll(timeout * 1000, SelectMode.SelectRead))
+#endif
             {
                 return this.Receive(buffer);
             }
@@ -364,18 +547,45 @@ namespace uPLibrary.Networking.M2Mqtt
         /// </summary>
         public void Close()
         {
-#if SSL
-            if (this.secure)
-            {
-#if (!MF_FRAMEWORK_VERSION_V4_2 && !MF_FRAMEWORK_VERSION_V4_3)
-                this.netStream.Close();
-#endif
-                this.sslStream.Close();
-            }
-            this.socket.Close();
+#if USEMONITOREDLOCK
+            using (new MonitoredLock(this.streamLock, "MqttNetworkChannel.Close streamLock"))
 #else
-            this.socket.Close();
+            lock (this.streamLock)
 #endif
+            {
+#if SSL
+                if (this.secure)
+                {
+#if (!MF_FRAMEWORK_VERSION_V4_2 && !MF_FRAMEWORK_VERSION_V4_3 && !COMPACT_FRAMEWORK)
+                    if (this.netStream != null)
+                    {
+                        this.netStream.Close();
+                    }
+#endif
+
+#if COMPACT_FRAMEWORK
+                    if(this.tlsHandler != null)
+                    {
+                        this.tlsHandler.Close();
+                    }
+#else
+                    if (this.sslStream != null)
+                    {
+                        this.sslStream.Close();
+                    }
+#endif
+                }
+
+#if COMPACT_FRAMEWORK
+                this.tcp.Close();
+#else
+                this.socket.Close();
+#endif
+
+#else
+                this.socket.Close();
+#endif
+            }
         }
 
         /// <summary>
@@ -387,12 +597,20 @@ namespace uPLibrary.Networking.M2Mqtt
             // secure channel requested
             if (secure)
             {
-#if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3)
+                // TODO: implement server part for .NET Compact (actually necessary?)
+#if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
 
-                this.netStream = new NetworkStream(this.socket);
-                this.sslStream = new SslStream(this.netStream, false, this.userCertificateValidationCallback, this.userCertificateSelectionCallback);
+#if USEMONITOREDLOCK
+                using (new MonitoredLock(this.streamLock, "MqttNetworkChannel.Accept streamLock"))
+#else
+                lock (this.streamLock)
+#endif
+                {
+                    this.netStream = new NetworkStream(this.socket);
+                    this.sslStream = new SslStream(this.netStream, false, this.userCertificateValidationCallback, this.userCertificateSelectionCallback);
 
-                this.sslStream.AuthenticateAsServer(this.serverCert, false, MqttSslUtility.ToSslPlatformEnum(this.sslProtocol), false);
+                    this.sslStream.AuthenticateAsServer(this.serverCert, false, MqttSslUtility.ToSslPlatformEnum(this.sslProtocol), false);
+                }
 #endif
             }
 

@@ -30,6 +30,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
+// 4.3.0.3: Do not quit receive thread immediately on host close. Catch any exception in ProcessInflightThread. Log local port when triggering closing and leaving threads due to exceptions.
+// 4.3.0.2: Route log level to WriteTrace delegate. Added log output for further analysis.
+// 4.3.0.1: Catch all possible exception in dispatch thread loop.
+
 // Version information for an assembly consists of the following four values:
 //
 //      Major Version
@@ -37,8 +41,8 @@ using System.Runtime.InteropServices;
 //      Build Number
 //      Revision
 //
-[assembly: AssemblyVersion("4.3.0.0")]
+[assembly: AssemblyVersion("4.3.0.4")]
 // to avoid compilation error (AssemblyFileVersionAttribute doesn't exist) under .Net CF 3.5
 #if !WindowsCE
-[assembly: AssemblyFileVersion("4.3.0.0")]
+[assembly: AssemblyFileVersion("4.3.0.4")]
 #endif
