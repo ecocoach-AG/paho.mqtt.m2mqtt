@@ -1396,7 +1396,7 @@ namespace uPLibrary.Networking.M2Mqtt
 #endif
                 {
                     // check number of messages inside inflight queue 
-                    enqueue = (this.inflightQueue.Count < this.settings.InflightQueueSize);
+                    enqueue = (this.inflightQueue.Count < this.settings.InflightQueueSize || msg.Type == MqttMsgBase.MQTT_MSG_PUBLISH_TYPE);
 
                     if (enqueue)
                     {
