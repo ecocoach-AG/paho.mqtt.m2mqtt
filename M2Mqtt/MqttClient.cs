@@ -61,6 +61,7 @@ using System.Collections;
 using MqttUtility = uPLibrary.Networking.M2Mqtt.Utility;
 using System.IO;
 using M2Mqtt.NetStandard.Utility;
+using System.Reflection;
 
 // ReSharper disable EnforceIfStatementBraces
 // ReSharper disable UsePatternMatching
@@ -452,6 +453,42 @@ namespace uPLibrary.Networking.M2Mqtt
         }
 #endif
 
+
+#if USEMONITOREDLOCK
+
+        public string GetAbsolutePathFrom(string relativePath)
+        {
+            var isPathRooted = Path.IsPathRooted(relativePath) || relativePath.StartsWith("/");
+
+            var directoryName = Path.GetDirectoryName(Assembly.GetExecutingAssembly().GetName().CodeBase.Replace("file:///", "").Replace("file://", ""));
+            // ReSharper disable once MergeConditionalExpression not supported in netcf
+            // file:\\ must be removed, otherwise DirectoryInfo will throw exception in newer .net framework versions
+            var currentAssemblyFullPath = directoryName == null ? null : directoryName.Replace("file:\\", "");
+
+            var absolutePathFrom = isPathRooted ? relativePath : Path.Combine(currentAssemblyFullPath, relativePath);
+            var pathParts = absolutePathFrom.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '\\');
+            var currentPath = new List<string>();
+            foreach (var part in pathParts)
+            {
+                switch (part)
+                {
+                    case ".": continue;
+                    case "..":
+                        currentPath.RemoveAt(currentPath.Count - 1);
+                        continue;
+                    default:
+                        currentPath.Add(part);
+                        break;
+                }
+            }
+
+            return string.Join(Path.DirectorySeparatorChar.ToString(), currentPath.ToArray());
+        }
+
+        private static readonly object _lockLogLock = new object();
+
+#endif
+
         /// <summary>
         /// MqttClient initialization
         /// </summary>
@@ -473,24 +510,28 @@ namespace uPLibrary.Networking.M2Mqtt
         private void Init(string brokerHostName, int brokerPort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol, TlsClient tlsClient)
 #endif
         {
+            //Console.WriteLine("MQTT LOCK: INIT");
 #if USEMONITOREDLOCK
-                //!!!to log the lock message uncomment following code!!!
-                //!!! this will slow down the entire plc/ ecc and the file will grow fast !!!
-                var lockLogTxt = "lockLogM2Mqtt.txt";
-                if (File.Exists(lockLogTxt))
-                {
-                    File.Delete(lockLogTxt);
-                }
-                var locklogTxtLock = new object();
-                MonitoredLock.EventLogMessage += (lvl, msg, ignoredId) =>
+            //!!!to log the lock message uncomment following code!!!
+            //!!! this will slow down the entire plc/ ecc and the file will grow fast !!!
+            Console.WriteLine("MQTT LOCK: USEMONITOREDLOCK");
+            var lockLogTxt = Path.Combine(GetAbsolutePathFrom("."), "lockLogM2Mqtt.txt");
+            Console.WriteLine("lockLogTxt: {0}", lockLogTxt);
+            if (File.Exists(lockLogTxt))
+            {
+                File.Delete(lockLogTxt);
+            }
+
+            MonitoredLock.EventLogMessage += (lvl, msg, ignoredId) =>
+                                             {
+                                                 lock (_lockLogLock)
                                                  {
+                                                     //diskAccessProvider.WriteFile(lockLogTxt, FileMode.Append, line);
                                                      var line = string.Format("{0};{1,10};{2};{3}\n", DateTime.UtcNow.ToString("O"), lvl, msg, ignoredId);
 
                                                      //Console.WriteLine(line);
-
-                                                     lock (locklogTxtLock)
+                                                     try
                                                      {
-                                                         //diskAccessProvider.WriteFile(lockLogTxt, FileMode.Append, line);
                                                          const int bufferSize = 1024;
                                                          using (var fileStream = new FileStream(lockLogTxt, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, bufferSize))
                                                          {
@@ -498,12 +539,20 @@ namespace uPLibrary.Networking.M2Mqtt
                                                              {
                                                                  writer.AutoFlush = true;
                                                                  writer.Write(line);
+                                                                 writer.Flush();
                                                              }
                                                          }
                                                      }
-                                                 };
+                                                     catch
+                                                     {
+                                                         Console.WriteLine("MQTT ERROR LOCK: {0}", line);
+                                                     }
+                                                 }
+                                             };
+            Console.WriteLine("MQTT LOCK: USEMONITOREDLOCK DONE");
 
 #endif
+                //Console.WriteLine("MQTT LOCK: INIT DONE");
 
 
             // set default MQTT protocol version (default is 3.1.1)
@@ -746,13 +795,27 @@ namespace uPLibrary.Networking.M2Mqtt
 
             // notify handles so that threads can end
             if (this.receiveEventWaitHandle != null)
+            {
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("SET", this.receiveEventWaitHandle.GetHashCode(), "stop all threads");
+#endif
                 this.receiveEventWaitHandle.Set();
+            }
+
             if (this.inflightWaitHandle != null)
+            {
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("SET", this.inflightWaitHandle.GetHashCode(), "stop all threads");
+#endif
                 this.inflightWaitHandle.Set();
+            }
 #if BROKER
             // unlock keep alive thread
             this.keepAliveEvent.Set();
 #else
+#if USEMONITOREDLOCK
+            MonitoredLock.LogEventWaitHandle("SET", this.keepAliveEvent.GetHashCode(), "Close");
+#endif
             this.keepAliveEvent.Set();
 #endif
             // join threads
@@ -1045,6 +1108,9 @@ namespace uPLibrary.Networking.M2Mqtt
                 this.eventQueue.Enqueue(internalEvent);
             }
 
+#if USEMONITOREDLOCK
+            MonitoredLock.LogEventWaitHandle("SET", this.receiveEventWaitHandle.GetHashCode(), "");
+#endif
             this.receiveEventWaitHandle.Set();
         }
 
@@ -1252,6 +1318,9 @@ namespace uPLibrary.Networking.M2Mqtt
         private MqttMsgBase SendReceive(byte[] msgBytes, int timeout)
         {
             // reset handle before sending
+#if USEMONITOREDLOCK
+            MonitoredLock.LogEventWaitHandle("RESET", this.syncEndReceiving.GetHashCode(), "SendReceive");
+#endif
             this.syncEndReceiving.Reset();
 
             // send message
@@ -1261,13 +1330,22 @@ namespace uPLibrary.Networking.M2Mqtt
             this.lastCommTime = Environment.TickCount;
 
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
+#if USEMONITOREDLOCK
+            MonitoredLock.LogEventWaitHandle("WAIT", this.syncEndReceiving.GetHashCode(), "SendReceive");
+#endif
             // wait for answer from broker
             if (this.syncEndReceiving.WaitOne(timeout, false))
 #else
             // wait for answer from broker
+#if USEMONITOREDLOCK
+            MonitoredLock.LogEventWaitHandle("WAIT", this.syncEndReceiving.GetHashCode(), "SendReceive");
+#endif
             if (this.syncEndReceiving.WaitOne(timeout))
 #endif
             {
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("PASS", this.syncEndReceiving.GetHashCode(), "ReceiveSendReceiveThread");
+#endif
                 // message received without exception
                 if (this.exReceiving == null)
                     return this.msgReceived;
@@ -1277,6 +1355,9 @@ namespace uPLibrary.Networking.M2Mqtt
             }
             else
             {
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("TIMEOUT", this.syncEndReceiving.GetHashCode(), "ReceiveSendReceiveThread");
+#endif
                 // throw timeout exception
                 throw new MqttCommunicationException();
             }
@@ -1430,6 +1511,9 @@ namespace uPLibrary.Networking.M2Mqtt
                 }
             }
 
+#if USEMONITOREDLOCK
+            MonitoredLock.LogEventWaitHandle("SET", this.inflightWaitHandle.GetHashCode(), "EnqueueInflight");
+#endif
             this.inflightWaitHandle.Set();
 
             return enqueue;
@@ -1538,6 +1622,9 @@ namespace uPLibrary.Networking.M2Mqtt
 #if TRACE
                     MqttUtility.Trace.WriteLine(TraceLevel.Queuing, "enqueued {0}", msg);
 #endif
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("SET", this.inflightWaitHandle.GetHashCode(), "endqueue internal");
+#endif
                     this.inflightWaitHandle.Set();
                 }
             }
@@ -1598,6 +1685,9 @@ namespace uPLibrary.Networking.M2Mqtt
 #if TRACE
                                 MqttUtility.Trace.WriteLine(TraceLevel.Frame, "RECV {0}", this.msgReceived);
 #endif
+#if USEMONITOREDLOCK
+                                MonitoredLock.LogEventWaitHandle("SET", this.syncEndReceiving.GetHashCode(), "ReceiveThread");
+#endif
                                 this.syncEndReceiving.Set();
                                 break;
 #endif
@@ -1628,6 +1718,9 @@ namespace uPLibrary.Networking.M2Mqtt
                                 this.msgReceived = MqttMsgPingResp.Parse(fixedHeaderFirstByte[0], (byte)this.ProtocolVersion, this.channel);
 #if TRACE
                                 MqttUtility.Trace.WriteLine(TraceLevel.Frame, "RECV {0}", this.msgReceived);
+#endif
+#if USEMONITOREDLOCK
+                                MonitoredLock.LogEventWaitHandle("SET", this.syncEndReceiving.GetHashCode(), "ReceiveThread");
 #endif
                                 this.syncEndReceiving.Set();
                                 break;
@@ -1821,11 +1914,23 @@ namespace uPLibrary.Networking.M2Mqtt
             while (this.isRunning)
             {
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("WAIT", this.keepAliveEvent.GetHashCode(), "KeepAliveThread");
+#endif
                 // waiting...
                 this.keepAliveEvent.WaitOne(wait, false);
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("PASS", this.keepAliveEvent.GetHashCode(), "KeepAliveThread");
+#endif
 #else
                 // waiting...
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("WAIT", this.keepAliveEvent.GetHashCode(), "KeepAliveThread");
+#endif
                 this.keepAliveEvent.WaitOne(wait);
+#if USEMONITOREDLOCK
+                MonitoredLock.LogEventWaitHandle("PASS", this.keepAliveEvent.GetHashCode(), "KeepAliveThread");
+#endif
 #endif
 
                 if (this.isRunning)
@@ -1885,8 +1990,17 @@ namespace uPLibrary.Networking.M2Mqtt
                 }
 #else
                 if ((this.eventQueue.Count == 0) && this.isRunning)
+                {
                     // wait on receiving message from client
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("WAIT", this.receiveEventWaitHandle.GetHashCode(), "");
+#endif
                     this.receiveEventWaitHandle.WaitOne();
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("PASS", this.receiveEventWaitHandle.GetHashCode(), "");
+#endif
+                }
+
 #endif
 
                 // check if it is running or we are closing client
@@ -2054,11 +2168,24 @@ namespace uPLibrary.Networking.M2Mqtt
                 while (this.isRunning)
                 {
 #if (MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
-                    // wait on message queueud to inflight
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("WAIT", this.inflightWaitHandle.GetHashCode(), "ProcessInflight");
+#endif
+                    // wait on message queued to inflight
                     this.inflightWaitHandle.WaitOne(timeout, false);
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("PASS", this.inflightWaitHandle.GetHashCode(), "ProcessInflight");
+#endif
 #else
-                    // wait on message queueud to inflight
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("WAIT", this.inflightWaitHandle.GetHashCode(), "ProcessInflight");
+#endif
+                    // wait on message queued to inflight
                     this.inflightWaitHandle.WaitOne(timeout);
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("PASS", this.inflightWaitHandle.GetHashCode(), "ProcessInflight");
+#endif
+
 #endif
 
                     // it could be unblocked because Close() method is joining
@@ -2792,6 +2919,9 @@ namespace uPLibrary.Networking.M2Mqtt
                     }
 
                     // unlock process inflight queue
+#if USEMONITOREDLOCK
+                    MonitoredLock.LogEventWaitHandle("SET", this.inflightWaitHandle.GetHashCode(), "restore session");
+#endif
                     this.inflightWaitHandle.Set();
                 }
                 else

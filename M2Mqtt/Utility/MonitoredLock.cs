@@ -74,6 +74,7 @@ namespace M2Mqtt.NetStandard.Utility
 
         private void LogMessage(string message, bool isExit, bool isDisposing)
         {
+            //Console.WriteLine("LogMessage: {0} isExit: {1} isDisposing: {2} EventLogMessage!=null: {3} ", message, isExit, isDisposing, EventLogMessage!=null);
             if (EventLogMessage != null)
             {
                 var threadId = Thread.CurrentThread.ManagedThreadId;
@@ -91,5 +92,19 @@ namespace M2Mqtt.NetStandard.Utility
         }
 
         public static event MonitorLogMessage EventLogMessage;
+
+        public static void LogEventWaitHandle(string action, int resetId, string message)
+        {
+            if (EventLogMessage != null)
+            {
+                var threadId = Thread.CurrentThread.ManagedThreadId;
+                var threadName = Thread.CurrentThread.Name;
+
+                var enrichedMessage = string.Format("EventWaitHandle:{0,5};{1, 10};{2, 10};{3};{4}", action, resetId, threadId, threadName, message);
+                var logLevel = 3; //int.Information;
+
+                EventLogMessage.Invoke(logLevel, enrichedMessage, -1);
+            }
+        }
     }
 }
